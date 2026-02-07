@@ -10,17 +10,41 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install deps
         run: |
           set -euo pipefail
           sudo softwareupdate --install-rosetta --agree-to-license || true
           brew update
           brew install cmake ninja || true
+
+      - name: Fetch latest BoringSSL xcframework
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/_boringssl"
+          api="https://api.github.com/repos/quiclane/boringssl-spm/releases/latest"
+          json="$(curl -fsSL "$api")"
+          url="$(/usr/bin/python3 - <<'PY'
+import json,sys
+j=json.loads(sys.stdin.read())
+assets=j.get("assets",[])
+z=[a for a in assets if (a.get("name","").endswith(".xcframework.zip") or a.get("name","").endswith(".zip"))]
+if not z: raise SystemExit("missing zip asset")
+print(z[0]["browser_download_url"])
+PY
+<<<"$json")"
+          curl -fL -o "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" "$url"
+          (cd "$GITHUB_WORKSPACE/_boringssl" && /usr/bin/unzip -q "BoringSSL.xcframework.zip")
+          test -d "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework"
+
       - name: Build
+        env:
+          BORING_XCF: ${{ github.workspace }}/_boringssl/BoringSSL.xcframework
         run: |
           set -euo pipefail
           chmod +x ci/build_lsquic_ios.sh
           ./ci/build_lsquic_ios.sh
+
       - name: Verify artifact
         run: |
           set -euo pipefail
