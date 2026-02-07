@@ -3,113 +3,93 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/_work"
-UP="$ROOT/_upstream"
 OUT="$ROOT/build-out"
-IOS_MIN="13.0"
+XCF="${BORING_XCF:-$HOME/Desktop/boringssl-spm/build-out/BoringSSL.xcframework}"
 
-mkdir -p "$WORK" "$UP" "$OUT"
-rm -rf "$WORK"/*
+IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+SIM_SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 
-need(){ command -v "$1" >/dev/null 2>&1 || { echo "MISSING:$1"; exit 1; }; }
-need git; need cmake; need ninja; need xcrun; need xcodebuild; need lipo; need libtool; need zip
+rm -rf "$WORK" "$OUT"
+mkdir -p "$WORK" "$OUT"
 
-BORING_REPO="https://boringssl.googlesource.com/boringssl"
-LSQUIC_REPO="https://github.com/litespeedtech/lsquic.git"
-LSQUIC_BRANCH="master"
+echo "== check boringssl xcframework =="
+test -d "$XCF"
+test -f "$XCF/ios-arm64/Headers/openssl/ssl.h"
+test -f "$XCF/ios-arm64/libboringssl_ios_arm64.a"
+test -f "$XCF/ios-arm64_x86_64-simulator/libboringssl_sim.a"
+echo "OK XCF=$XCF"
 
-echo "==clone=="
-rm -rf "$UP/boringssl" "$UP/lsquic"
-git clone --depth 1 "$BORING_REPO" "$UP/boringssl"
-git clone --depth 1 --branch "$LSQUIC_BRANCH" "$LSQUIC_REPO" "$UP/lsquic"
+thin_boringssl() {
+  arch="$1"
+  plat="$2"
+  mkdir -p "$WORK/boringssl_thin"
+  if [ "$plat" = "ios" ]; then
+    in="$XCF/ios-arm64/libboringssl_ios_arm64.a"
+    out="$WORK/boringssl_thin/boringssl_ios_${arch}.a"
+    cp -f "$in" "$out"
+  else
+    in="$XCF/ios-arm64_x86_64-simulator/libboringssl_sim.a"
+    out="$WORK/boringssl_thin/boringssl_sim_${arch}.a"
+    lipo -thin "$arch" "$in" -output "$out"
+  fi
+  printf "%s" "$out"
+}
 
-BORING_SRC="$UP/boringssl"
-LSQUIC_SRC="$UP/lsquic"
+echo "== clone lsquic =="
+git clone --depth 1 --recurse-submodules "$(awk -F= '/^repo=/{print $2}' "$ROOT/ci/lsquic-upstream.txt" | tail -n 1)" "$WORK/lsquic"
 
-SDKP="$(xcrun --sdk iphoneos --show-sdk-path)"
-SDKS="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+build_one() {
+  name="$1"; sdk="$2"; arch="$3"; plat="$4"
+  bdir="$WORK/build-$name"
+  rm -rf "$bdir"
+  mkdir -p "$bdir"
+  cd "$bdir"
 
-build_boringssl_one(){
-  PLAT="$1"; ARCHS="$2"; SDK="$3"; BDIR="$4"
-  rm -rf "$BDIR"; mkdir -p "$BDIR"
-  cmake -S "$BORING_SRC" -B "$BDIR" -G Ninja \
+  BORING_INC="$XCF/ios-arm64/Headers"
+  BORING_LIB="$(thin_boringssl "$arch" "$plat")"
+
+  export EXTRA_CFLAGS="-Wno-unused-but-set-variable -Wno-unused-function"
+  export EXTRA_CXXFLAGS="-Wno-unused-but-set-variable -Wno-unused-function"
+
+  cmake -G Ninja "$WORK/lsquic" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT="$SDK" \
-    -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
-    -DBUILD_SHARED_LIBS=0
-  cmake --build "$BDIR"
+    -DCMAKE_OSX_SYSROOT="$sdk" \
+    -DCMAKE_OSX_ARCHITECTURES="$arch" \
+    -DBORINGSSL_INCLUDE="$BORING_INC" \
+    -DBORINGSSL_LIB_ssl="$BORING_LIB" \
+    -DBORINGSSL_LIB_crypto="$BORING_LIB" \
+    -DLSQUIC_TESTS=OFF \
+    -DLSQUIC_BIN=OFF
+
+  ninja
 }
 
-echo "==boringssl build=="
-B_IOS="$WORK/boring_ios_arm64"
-B_SIM="$WORK/boring_sim_universal"
-build_boringssl_one ios "arm64" "$SDKP" "$B_IOS"
-build_boringssl_one sim "arm64;x86_64" "$SDKS" "$B_SIM"
+echo "== build ios arm64 =="
+build_one ios-arm64 "$IOS_SDK" arm64 ios
 
-combine_boringssl(){
-  BDIR="$1"; OUTA="$2"
-  SSL="$BDIR/ssl/libssl.a"
-  CRY="$BDIR/crypto/libcrypto.a"
-  test -f "$SSL"
-  test -f "$CRY"
-  libtool -static -o "$OUTA" "$SSL" "$CRY"
-}
+echo "== build sim arm64 =="
+build_one sim-arm64 "$SIM_SDK" arm64 sim
 
-mkdir -p "$WORK/boring_out"
-BORING_IOS_A="$WORK/boring_out/libboringssl_ios.a"
-BORING_SIM_A="$WORK/boring_out/libboringssl_sim.a"
-combine_boringssl "$B_IOS" "$BORING_IOS_A"
-combine_boringssl "$B_SIM" "$BORING_SIM_A"
-BORING_INC="$BORING_SRC/include"
+echo "== build sim x86_64 =="
+build_one sim-x86_64 "$SIM_SDK" x86_64 sim
 
-echo "==lsquic build=="
-build_lsquic_one(){
-  NAME="$1"; ARCHS="$2"; SDK="$3"; BORING_A="$4"; ODIR="$5"
-  rm -rf "$ODIR"; mkdir -p "$ODIR"
-  cmake -S "$LSQUIC_SRC" -B "$ODIR" -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=0 \
-    -DLSQUIC_SHARED_LIB=0 \
-    -DLSQUIC_BUILD_TESTS=0 \
-    -DLSQUIC_BUILD_EXAMPLES=0 \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT="$SDK" \
-    -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
-    -DBORINGSSL_INCLUDE_DIR="$BORING_INC" \
-    -DBORINGSSL_LIBRARIES="$BORING_A"
-  cmake --build "$ODIR"
-}
+IOS_LIB="$WORK/build-ios-arm64/src/liblsquic/liblsquic.a"
+SIM_ARM64_LIB="$WORK/build-sim-arm64/src/liblsquic/liblsquic.a"
+SIM_X86_LIB="$WORK/build-sim-x86_64/src/liblsquic/liblsquic.a"
 
-L_IOS="$WORK/lsquic_ios_arm64"
-L_SIM="$WORK/lsquic_sim_universal"
-build_lsquic_one ios "arm64" "$SDKP" "$BORING_IOS_A" "$L_IOS"
-build_lsquic_one sim "arm64;x86_64" "$SDKS" "$BORING_SIM_A" "$L_SIM"
+echo "== lipo sim =="
+mkdir -p "$OUT/sim-fat"
+lipo -create "$SIM_ARM64_LIB" "$SIM_X86_LIB" -output "$OUT/sim-fat/liblsquic.a"
 
-find_liblsquic(){
-  base="$1"
-  f="$(find "$base" -type f -name 'liblsquic.a' -print | head -n 1 || true)"
-  test -n "${f:-}"
-  echo "$f"
-}
-
-LIB_IOS="$(find_liblsquic "$L_IOS")"
-LIB_SIM="$(find_liblsquic "$L_SIM")"
-
-echo "==headers stage=="
-HDR="$WORK/headers"
-rm -rf "$HDR"; mkdir -p "$HDR"
-cp -R "$LSQUIC_SRC/include" "$HDR/include"
-
-echo "==xcframework=="
-rm -rf "$OUT/LSQUIC.xcframework" "$OUT/LSQUIC.xcframework.zip"
+echo "== create xcframework =="
 xcodebuild -create-xcframework \
-  -library "$LIB_IOS" -headers "$HDR/include" \
-  -library "$LIB_SIM" -headers "$HDR/include" \
+  -library "$IOS_LIB" -headers "$WORK/lsquic/include" \
+  -library "$OUT/sim-fat/liblsquic.a" -headers "$WORK/lsquic/include" \
   -output "$OUT/LSQUIC.xcframework"
 
-cd "$ROOT"
-zip -r "$OUT/LSQUIC.xcframework.zip" "build-out/LSQUIC.xcframework" >/dev/null
-test -f "$OUT/LSQUIC.xcframework.zip"
-echo "OK: $OUT/LSQUIC.xcframework.zip"
+echo "== zip =="
+rm -f "$OUT/LSQUIC.xcframework.zip"
+( cd "$OUT" && /usr/bin/zip -r "LSQUIC.xcframework.zip" "LSQUIC.xcframework" >/dev/null )
+
+ls -la "$OUT/LSQUIC.xcframework" "$OUT/LSQUIC.xcframework.zip"
