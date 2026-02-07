@@ -16,7 +16,7 @@ jobs:
           set -euo pipefail
           sudo softwareupdate --install-rosetta --agree-to-license || true
           brew update
-          brew install cmake ninja || true
+          brew install cmake ninja unzip || true
 
       - name: Fetch latest BoringSSL xcframework
         run: |
@@ -24,17 +24,12 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/_boringssl"
           api="https://api.github.com/repos/quiclane/boringssl-spm/releases/latest"
           json="$(curl -fsSL "$api")"
-          url="$(/usr/bin/python3 - <<'PY'
-import json,sys
-j=json.loads(sys.stdin.read())
-assets=j.get("assets",[])
-z=[a for a in assets if (a.get("name","").endswith(".xcframework.zip") or a.get("name","").endswith(".zip"))]
-if not z: raise SystemExit("missing zip asset")
-print(z[0]["browser_download_url"])
-PY
-<<<"$json")"
+          url="$(python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); a=j.get("assets",[]); z=[x for x in a if x.get("name","").endswith(".xcframework.zip")]; 
+import sys as _s; 
+_s.stdout.write((z[0]["browser_download_url"] if z else ""))' <<<"$json")"
+          test -n "$url"
           curl -fL -o "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" "$url"
-          (cd "$GITHUB_WORKSPACE/_boringssl" && /usr/bin/unzip -q "BoringSSL.xcframework.zip")
+          unzip -q "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" -d "$GITHUB_WORKSPACE/_boringssl"
           test -d "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework"
 
       - name: Build
@@ -45,7 +40,7 @@ PY
           chmod +x ci/build_lsquic_ios.sh
           ./ci/build_lsquic_ios.sh
 
-      - name: Verify artifact
+      - name: Verify outputs
         run: |
           set -euo pipefail
           test -f build-out/LSQUIC.xcframework.zip
