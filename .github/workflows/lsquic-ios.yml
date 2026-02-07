@@ -11,10 +11,10 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install deps
         run: |
@@ -26,21 +26,13 @@ jobs:
       - name: Fetch latest BoringSSL xcframework
         run: |
           set -euo pipefail
-          mkdir -p _boringssl
+          mkdir -p "$GITHUB_WORKSPACE/_boringssl"
           api="https://api.github.com/repos/quiclane/boringssl-spm/releases/latest"
-          url="$(curl -fsSL "$api" | python3 - <<'PY'
-import json,sys
-j=json.load(sys.stdin)
-for a in j.get("assets",[]):
-    if a.get("name","").endswith(".xcframework.zip"):
-        print(a["browser_download_url"])
-        break
-PY
-)"
+          url="$(curl -fsSL "$api" | python3 -c 'import json,sys; j=json.load(sys.stdin); a=j.get("assets",[]); z=[x for x in a if x.get("name","").endswith(".xcframework.zip")]; print(z[0]["browser_download_url"] if z else "")')"
           test -n "$url"
-          curl -fL -o _boringssl/BoringSSL.xcframework.zip "$url"
-          unzip -q _boringssl/BoringSSL.xcframework.zip -d _boringssl
-          test -d _boringssl/BoringSSL.xcframework
+          curl -fL -o "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" "$url"
+          unzip -q "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" -d "$GITHUB_WORKSPACE/_boringssl"
+          test -d "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework"
 
       - name: Build LSQUIC
         env:
@@ -54,3 +46,32 @@ PY
         run: |
           set -euo pipefail
           test -f build-out/LSQUIC.xcframework.zip
+
+      - name: Compute checksum
+        id: sum
+        run: |
+          set -euo pipefail
+          cs="$(swift package compute-checksum build-out/LSQUIC.xcframework.zip)"
+          echo "checksum=$cs" >> "$GITHUB_OUTPUT"
+
+      - name: Compute release tag
+        id: meta
+        run: |
+          set -euo pipefail
+          head="$(git ls-remote https://github.com/litespeedtech/lsquic.git refs/heads/master | awk '{print $1}')"
+          short="$(printf "%s" "$head" | cut -c1-12)"
+          tag="ios-$(date +%Y%m%d)-${short}"
+          echo "upstream=$head" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body: |
+            upstream=${{ steps.meta.outputs.upstream }}
+            checksum=${{ steps.sum.outputs.checksum }}
+          files: build-out/LSQUIC.xcframework.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
