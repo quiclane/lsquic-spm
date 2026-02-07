@@ -24,22 +24,22 @@ jobs:
           set -euo pipefail
           ROOT="$PWD"
           CFG="$ROOT/ci/lsquic-upstream.txt"
-          REPO="$(awk -F= '/^repo=/{print $2}' "$CFG" 2>/dev/null|tail -n 1)"
-          BRANCH="$(awk -F= '/^branch=/{print $2}' "$CFG" 2>/dev/null|tail -n 1)"
-          [ -n "${REPO:-}" ]||REPO="https://github.com/litespeedtech/lsquic.git"
-          [ -n "${BRANCH:-}" ]||BRANCH="master"
+          REPO="$(awk -F= '/^repo=/{print $2}' "$CFG" 2>/dev/null | tail -n 1)"
+          BRANCH="$(awk -F= '/^branch=/{print $2}' "$CFG" 2>/dev/null | tail -n 1)"
+          [ -n "${REPO:-}" ] || REPO="https://github.com/litespeedtech/lsquic.git"
+          [ -n "${BRANCH:-}" ] || BRANCH="master"
           LAST_FILE="$ROOT/ci/last_success_epoch.txt"
           UP_FILE="$ROOT/ci/upstream_head.txt"
           now="$(date +%s)"
           last=0
-          if [ -f "$LAST_FILE" ]; then last="$(tr -d '\r\n ' <"$LAST_FILE"||echo 0)"; fi
+          if [ -f "$LAST_FILE" ]; then last="$(tr -d '\r\n ' <"$LAST_FILE" || echo 0)"; fi
           if [ -n "${last:-}" ] && [ "$last" -gt 0 ] 2>/dev/null; then age="$((now-last))"; else age=999999999; fi
           tmp="$(mktemp -d)"
           git clone --depth 1 --branch "$BRANCH" "$REPO" "$tmp/up"
           head="$(git -C "$tmp/up" rev-parse HEAD)"
           rm -rf "$tmp"
           prev=""
-          if [ -f "$UP_FILE" ]; then prev="$(tr -d '\r\n ' <"$UP_FILE"||true)"; fi
+          if [ -f "$UP_FILE" ]; then prev="$(tr -d '\r\n ' <"$UP_FILE" || true)"; fi
           should=1
           if [ "$age" -lt 1209600 ]; then should=0; fi
           if [ -n "${prev:-}" ] && [ "$head" = "$prev" ]; then should=0; fi
