@@ -1,0 +1,105 @@
+name: build-ios
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: deps
+        run: |
+          set -euo pipefail
+          brew update
+          brew install cmake ninja || true
+
+      - name: gate
+        id: gate
+        run: |
+          set -euo pipefail
+          ROOT="$PWD"
+          CFG="$ROOT/ci/lsquic-upstream.txt"
+          REPO="$(awk -F= '/^repo=/{print $2}' "$CFG" 2>/dev/null|tail -n 1)"
+          BRANCH="$(awk -F= '/^branch=/{print $2}' "$CFG" 2>/dev/null|tail -n 1)"
+          [ -n "${REPO:-}" ]||REPO="https://github.com/litespeedtech/lsquic.git"
+          [ -n "${BRANCH:-}" ]||BRANCH="master"
+          LAST_FILE="$ROOT/ci/last_success_epoch.txt"
+          UP_FILE="$ROOT/ci/upstream_head.txt"
+          now="$(date +%s)"
+          last=0
+          if [ -f "$LAST_FILE" ]; then last="$(tr -d '\r\n ' <"$LAST_FILE"||echo 0)"; fi
+          if [ -n "${last:-}" ] && [ "$last" -gt 0 ] 2>/dev/null; then age="$((now-last))"; else age=999999999; fi
+          head="$(git ls-remote "$REPO" "refs/heads/$BRANCH" | awk '{print $1}' | head -n 1)"
+          prev=""
+          if [ -f "$UP_FILE" ]; then prev="$(tr -d '\r\n ' <"$UP_FILE"||true)"; fi
+          should=1
+          if [ "$age" -lt 1209600 ]; then should=0; fi
+          if [ -n "${prev:-}" ] && [ "$head" = "$prev" ]; then should=0; fi
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "now=$now" >> "$GITHUB_OUTPUT"
+          echo "should=$should" >> "$GITHUB_OUTPUT"
+
+      - name: fetch boringssl xcframework
+        if: steps.gate.outputs.should == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/boringssl_spm && mkdir -p /tmp/boringssl_spm
+          gh release download --repo quiclane/boringssl-spm --pattern "BoringSSL.xcframework.zip" --dir /tmp/boringssl_spm
+          unzip -q /tmp/boringssl_spm/BoringSSL.xcframework.zip -d /tmp/boringssl_spm
+          test -d /tmp/boringssl_spm/BoringSSL.xcframework
+          echo "BORING_XCF=/tmp/boringssl_spm/BoringSSL.xcframework" >> "$GITHUB_ENV"
+
+      - name: build
+        if: steps.gate.outputs.should == '1'
+        run: |
+          set -euo pipefail
+          chmod +x ci/build_lsquic_ios.sh
+          ./ci/build_lsquic_ios.sh
+
+      - name: checksum
+        if: steps.gate.outputs.should == '1'
+        id: sum
+        run: |
+          set -euo pipefail
+          cs="$(swift package compute-checksum build-out/LSQUIC.xcframework.zip)"
+          echo "checksum=$cs" >> "$GITHUB_OUTPUT"
+
+      - name: update Package.swift
+        if: steps.gate.outputs.should == '1'
+        run: |
+          set -euo pipefail
+          short="$(echo "${{ steps.gate.outputs.head }}"|cut -c1-12)"
+          tag="v0.0.$(date +%Y%m%d)-$short"
+          url="https://github.com/quiclane/lsquic-spm/releases/download/$tag/LSQUIC.xcframework.zip"
+          perl -0777 -i -pe 's@url:"[^"]+"@url:"'"$url"'"@;s@checksum:"[0-9a-f]{64}"@checksum:"'"${{ steps.sum.outputs.checksum }}"'"@' Package.swift
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: commit Package.swift + state
+        if: steps.gate.outputs.should == '1'
+        run: |
+          set -euo pipefail
+          mkdir -p ci
+          printf "%s\n" "${{ steps.gate.outputs.head }}" > ci/upstream_head.txt
+          printf "%s\n" "${{ steps.gate.outputs.now }}" > ci/last_success_epoch.txt
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add Package.swift ci/upstream_head.txt ci/last_success_epoch.txt
+          git commit -m "ci: update package + state"||true
+          git push
+
+      - name: release
+        if: steps.gate.outputs.should == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" build-out/LSQUIC.xcframework.zip --title "Release $TAG" --notes "upstream=${{ steps.gate.outputs.head }}
+checksum=${{ steps.sum.outputs.checksum }}"
