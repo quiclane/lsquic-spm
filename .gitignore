@@ -1,0 +1,8 @@
+.DS_Store
+_work/
+build-out/
+build-test/
+BoringSSL.xcframework.zip
+*.xcframework.zip
+*.xcframework/
+_upstream/

@@ -1,0 +1,2 @@
+repo=https://github.com/litespeedtech/lsquic.git
+branch=master
