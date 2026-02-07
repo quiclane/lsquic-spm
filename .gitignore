@@ -6,3 +6,4 @@ BoringSSL.xcframework.zip
 *.xcframework.zip
 *.xcframework/
 _upstream/
+.build/
