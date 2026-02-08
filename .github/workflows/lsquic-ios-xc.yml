@@ -78,6 +78,16 @@ jobs:
           set -euo pipefail
           test -f build-out/LSQUIC.xcframework.zip
 
+      - name: Copy LSQUIC.xcframework to repo
+        if: steps.gate.outputs.should == '1'
+        run: |
+          set -euo pipefail
+          cp -R build-out/LSQUIC.xcframework $GITHUB_WORKSPACE/lsquic-spm/LSQUIC.xcframework
+          cp build-out/LSQUIC.xcframework.zip $GITHUB_WORKSPACE/lsquic-spm/LSQUIC.xcframework.zip
+          git add lsquic-spm/LSQUIC.xcframework lsquic-spm/LSQUIC.xcframework.zip
+          git commit -m "Add LSQUIC.xcframework and .zip to repo"
+          git push origin main
+
       - name: Compute checksum + notes
         if: steps.gate.outputs.should == '1'
         id: sum
