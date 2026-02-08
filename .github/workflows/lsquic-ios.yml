@@ -1,15 +1,20 @@
 name: lsquic-ios
+
 on:
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * *"
+
 permissions:
   contents: write
+
 jobs:
   build:
     runs-on: macos-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install deps
         run: |
@@ -21,18 +26,23 @@ jobs:
       - name: Fetch latest BoringSSL xcframework
         run: |
           set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/_boringssl"
+          mkdir -p _boringssl
           api="https://api.github.com/repos/quiclane/boringssl-spm/releases/latest"
-          json="$(curl -fsSL "$api")"
-          url="$(python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); a=j.get("assets",[]); z=[x for x in a if x.get("name","").endswith(".xcframework.zip")]; 
-import sys as _s; 
-_s.stdout.write((z[0]["browser_download_url"] if z else ""))' <<<"$json")"
+          url="$(curl -fsSL "$api" | python3 - <<'PY'
+import json,sys
+j=json.load(sys.stdin)
+for a in j.get("assets",[]):
+    if a.get("name","").endswith(".xcframework.zip"):
+        print(a["browser_download_url"])
+        break
+PY
+)"
           test -n "$url"
-          curl -fL -o "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" "$url"
-          unzip -q "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework.zip" -d "$GITHUB_WORKSPACE/_boringssl"
-          test -d "$GITHUB_WORKSPACE/_boringssl/BoringSSL.xcframework"
+          curl -fL -o _boringssl/BoringSSL.xcframework.zip "$url"
+          unzip -q _boringssl/BoringSSL.xcframework.zip -d _boringssl
+          test -d _boringssl/BoringSSL.xcframework
 
-      - name: Build
+      - name: Build LSQUIC
         env:
           BORING_XCF: ${{ github.workspace }}/_boringssl/BoringSSL.xcframework
         run: |
@@ -40,7 +50,7 @@ _s.stdout.write((z[0]["browser_download_url"] if z else ""))' <<<"$json")"
           chmod +x ci/build_lsquic_ios.sh
           ./ci/build_lsquic_ios.sh
 
-      - name: Verify outputs
+      - name: Verify output
         run: |
           set -euo pipefail
           test -f build-out/LSQUIC.xcframework.zip
