@@ -34,9 +34,6 @@ In practice, it gives you:
 If nghttp2 is the gold standard for HTTP/2,
 LSQUIC is one of the most serious real-world QUIC implementations available.
 
-It is *not* a toy library.
-It is also *not* friendly to build.
-
 Why this repo exists (the real problem)
 ---------------------------------------
 
@@ -66,9 +63,6 @@ LSQUIC sits at the intersection of multiple hard problems:
    - URLs must be stable
    - checksums must match exactly
    - artifacts must be self-contained
-
-So if you have ever thought:
-“why can’t I just use QUIC in my iOS app?”
 
 This repo is the answer.
 
